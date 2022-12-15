@@ -244,8 +244,14 @@ class MainWindow(QWidget):
                             Currently supported image file formats are: ', accepted_types, 'Exiting now.')
                     sys.exit()
 
-                imsave(os.path.join(self.eval_data_path, seg_name), mask)
+                # get the outlines of the segmented objects
+                outlines = utils.masks_to_outlines(mask) #[True, False] outputs
+                new_mask = mask.copy()
 
+                new_mask[mask!=0] = 2
+                new_mask[outlines==True] = 1
+                imsave(os.path.join(self.eval_data_path, seg_name), new_mask)
+                
 
 class WelcomeWindow(QWidget):
     def __init__(self):
