@@ -1,3 +1,5 @@
 napari==0.4.17
 PyQt5
 cellpose
+joblib
+scikit-learn

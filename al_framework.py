@@ -10,12 +10,16 @@ from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QPixmap, QIcon
 import napari
 import torch 
-from cellpose import models, utils
+from cellpose import models
+from utils import merge_2d_labels, make_bbox
+from skimage.measure import regionprops_table
 import warnings
 warnings.simplefilter('ignore')
 
 ICON_SIZE = QSize(512,512)
 accepted_types = (".jpg", ".jpeg", ".png", ".tiff", ".tif")
+# Apply threshold on GFP
+threshold_gfp = 300 # Define the threshold looking at the plots
 
 def changeWindow(w1, w2):
     w1.hide()
@@ -39,32 +43,68 @@ class IconProvider(QFileIconProvider):
 
 class NapariWindow(QWidget):
     def __init__(self, 
-                img_filename,
+                img_filename_dapi,
+                img_filename_gfp,
                 eval_data_path,
                 train_data_path):
         super().__init__()
-        self.img_filename = img_filename
+
+        self.img_filename_dapi = img_filename_dapi
+        self.img_filename_gfp = img_filename_gfp
         self.eval_data_path = eval_data_path
         self.train_data_path = train_data_path
-        potential_seg_name = Path(self.img_filename).stem+'_seg.tiff' #+Path(self.img_filename).suffix
-        if os.path.exists(os.path.join(self.eval_data_path, self.img_filename)):
-            self.img = imread(os.path.join(self.eval_data_path, self.img_filename))
+
+        self.root_name = self.img_filename_dapi.split('DAPI Channel')[0]
+        potential_seg_name = self.root_name + '_seg.tiff' #Path(img_filename).stem+'_seg.tiff' #+Path(img_filename).suffix
+        potential_class_name = self.root_name + '_classes.tiff' #Path(img_filename).stem+'_classes.tiff' #+Path(img_filename).suffix
+
+        self.setWindowTitle("napari Viewer")
+        in_eval = False
+        # check if the image is in the uncurated folder
+        if os.path.exists(os.path.join(self.eval_data_path, self.img_filename_dapi)):
+            in_eval = True
+            self.img = imread(os.path.join(self.eval_data_path, self.img_filename_dapi))
+            # check if object segmentation and class masks are in the folder and read them if they are there  
             if os.path.exists(os.path.join(self.eval_data_path, potential_seg_name)):
                 seg = imread(os.path.join(self.eval_data_path, potential_seg_name))
             else: seg = None
+            if os.path.exists(os.path.join(self.eval_data_path, potential_class_name)):
+                classes = imread(os.path.join(self.eval_data_path, potential_class_name))
+            else: classes = None
+
+        # if not it will be in the curated folder
         else: 
-            self.img = imread(os.path.join(self.train_data_path, self.img_filename))
+            self.img = imread(os.path.join(self.train_data_path, self.img_filename_dapi))
+            # check if object segmentation and class masks are in the folder and read them if they are there 
             if os.path.exists(os.path.join(self.train_data_path, potential_seg_name)):
                 seg = imread(os.path.join(self.train_data_path, potential_seg_name))
             else: seg = None
+            if os.path.exists(os.path.join(self.train_data_path, potential_class_name)):
+                classes = imread(os.path.join(self.train_data_path, potential_class_name))
+            else: classes = None
+
+        # check and read gfp image too
+        if os.path.exists(os.path.join(self.eval_data_path, self.img_filename_gfp)):
+            self.img_gfp = imread(os.path.join(self.eval_data_path, self.img_filename_gfp))
+        elif os.path.exists(os.path.join(self.train_data_path, self.img_filename_gfp)):
+            self.img_gfp = imread(os.path.join(self.train_data_path, self.img_filename_gfp))
+        else:
+            self.img_gfp = None
         
-        self.setWindowTitle("napari Viewer")
+        # start napari and load all data into the viewer
         self.viewer = napari.Viewer(show=False)
-        self.viewer.add_image(self.img)
+        self.viewer.add_image(self.img, name='DAPI Channel')
+        
+        if self.img_gfp is not None:
+            self.viewer.add_image(self.img_gfp, name='GFP Channel')
 
         if seg is not None: 
-            self.viewer.add_labels(seg)
+            self.viewer.add_labels(seg, name='Cell Objects')
 
+        if classes is not None:
+            self.viewer.add_labels(classes, name='Cell Classes')
+
+        # add napari viewer to the window
         main_window = self.viewer.window._qt_window
         layout = QVBoxLayout()
         layout.addWidget(main_window)
@@ -72,7 +112,9 @@ class NapariWindow(QWidget):
         add_button = QPushButton('Add to training data')
         layout.addWidget(add_button)
         add_button.clicked.connect(self.on_add_button_clicked)
+        if not in_eval: add_button.hide()
 
+        # this is commented because it is the same as closing the window
         #self.return_button = QPushButton('Return')
         #layout.addWidget(self.return_button)
         #self.return_button.clicked.connect(self.on_return_button_clicked)
@@ -95,13 +137,41 @@ class NapariWindow(QWidget):
             return []
 
     def on_add_button_clicked(self):
+
+        # move the image to the curated dataset folder
+        os.replace(os.path.join(self.eval_data_path, self.img_filename_dapi), os.path.join(self.train_data_path, self.img_filename_dapi))
+        # if we have a gfp image then move that too to the curated dataset folder
+        if os.path.exists(os.path.join(self.eval_data_path, self.img_filename_gfp)):
+            os.replace(os.path.join(self.eval_data_path, self.img_filename_gfp), os.path.join(self.train_data_path, self.img_filename_gfp))
+
+        # get the napari layer names
         label_names = self._get_layer_names()
-        seg = self.viewer.layers[label_names[0]].data
-        os.replace(os.path.join(self.eval_data_path, self.img_filename), os.path.join(self.train_data_path, self.img_filename))
-        seg_name = Path(self.img_filename).stem+'_seg.tiff' #+Path(self.img_filename).suffix
-        imsave(os.path.join(self.train_data_path, seg_name),seg)
-        if os.path.exists(os.path.join(self.eval_data_path, seg_name)): 
-            os.remove(os.path.join(self.eval_data_path, seg_name))
+        undefined_layers = []
+        seg = None
+        classes = None
+        # save the labels - ideally we have labels with names 'Cell Objects' and 'Cell Classes'
+        for name in label_names:
+            if 'Objects' in name:
+                seg = self.viewer.layers[name].data
+                seg_name = self.root_name+'_seg.tiff' #+Path(self.img_filename_dapi).suffix
+                imsave(os.path.join(self.train_data_path, seg_name),seg)
+                if os.path.exists(os.path.join(self.eval_data_path, seg_name)): 
+                    os.remove(os.path.join(self.eval_data_path, seg_name))
+            elif 'Classes' in name:
+                classes = self.viewer.layers[name].data
+                classes_name = self.root_name+'_classes.tiff' #+Path(self.img_filename_dapi).suffix
+                imsave(os.path.join(self.train_data_path, classes_name), classes)
+                if os.path.exists(os.path.join(self.eval_data_path, classes_name)): 
+                    os.remove(os.path.join(self.eval_data_path, classes_name))   
+            else:
+                undefined_layers.append(self.viewer.layers[name].data)
+
+        if len(undefined_layers)!= 0:
+            for idx, label in enumerate(undefined_layers):
+                name= 'label'+str(idx)+'.tif'
+                imsave(os.path.join(self.train_data_path, name), label)
+                print('Warning: you have created file with name: ', name,'. Please rename this with an extension _seg or _classes if you would like to use it within this tool again.')
+
         self.close()
 
     '''
@@ -183,8 +253,29 @@ class MainWindow(QWidget):
         self.setLayout(self.main_layout)
         self.show()
 
-    def launch_napari_window(self):                                       
-        self.nap_win = NapariWindow(img_filename=self.cur_selected_img, 
+    def launch_napari_window(self):
+        
+        if os.path.exists(os.path.join(self.eval_data_path, self.cur_selected_img)):
+            in_eval = True
+        else: in_eval = False
+
+        if 'GFP Channel' in self.cur_selected_img:
+            gfp_img = self.cur_selected_img
+            name_split = gfp_img.split('GFP Channel')[0]
+            if in_eval:
+                dapi_img = [file for file in os.listdir(self.eval_data_path) if name_split in file and 'DAPI Channel' in file][0]
+            else:
+                dapi_img = [file for file in os.listdir(self.train_data_path) if name_split in file and 'DAPI Channel' in file][0]
+
+        else: 
+            dapi_img = self.cur_selected_img
+            name_split = dapi_img.split('DAPI Channel')[0]
+            if in_eval:
+                gfp_img = [file for file in os.listdir(self.eval_data_path) if name_split in file and 'GFP Channel' in file][0]
+            else:
+                gfp_img = [file for file in os.listdir(self.train_data_path) if name_split in file and 'GFP Channel' in file][0]
+        self.nap_win = NapariWindow(img_filename_dapi=dapi_img,
+                                    img_filename_gfp=gfp_img,
                                     eval_data_path=self.eval_data_path, 
                                     train_data_path=self.train_data_path)
         self.nap_win.show()
@@ -205,39 +296,47 @@ class MainWindow(QWidget):
         else:
             model = models.Cellpose(gpu=False, model_type="cyto")
         
-        list_files = [file for file in os.listdir(self.eval_data_path) if Path(file).suffix in accepted_types]
-        
-        for img_filename in list_files:
+        list_files_dapi = [file for file in os.listdir(self.eval_data_path) if Path(file).suffix in accepted_types and 'GFP Channel' not in file]
+        list_files_gfp = [file for file in os.listdir(self.eval_data_path) if Path(file).suffix in accepted_types and 'GFP Channel' in file]
+        list_files_dapi.sort()
+        list_files_gfp.sort()
+
+        for idx, img_filename in enumerate(list_files_dapi):
             # don't do this for segmentations in the folder
-            if '_seg' in img_filename:  
-                continue
-                #extend to check the prefix also matches an existing image
-                #seg_name = Path(self.img_filename).stem+'_seg'+Path(self.img_filename).suffix
+            #extend to check the prefix also matches an existing image
+            #seg_name = Path(self.img_filename).stem+'_seg'+Path(self.img_filename).suffix
+            if '_seg' in img_filename or '_classes' in img_filename:  continue
+
             else:
                 img = imread(os.path.join(self.eval_data_path, img_filename)) #DAPI
+                img_gfp = imread(os.path.join(self.eval_data_path, list_files_gfp[idx]))
                 orig_size = img.shape
-                seg_name = Path(img_filename).stem+'_seg.tiff' #+Path(img_filename).suffix
+                name_split = img_filename.split('DAPI Channel')[0]
+                seg_name = name_split + '_seg.tiff' #Path(img_filename).stem+'_seg.tiff' #+Path(img_filename).suffix
+                class_name = name_split + '_classes.tiff' #Path(img_filename).stem+'_classes.tiff' #+Path(img_filename).suffix
 
-                # png and jpeg will be RGB by deafult and 2D
-                # tif can be grayscale 2D
-                # or 2D RGB and RGBA
-                if Path(img_filename).suffix in (".jpg", ".jpeg", ".png") or (Path(img_filename).suffix in (".tiff", ".tif") and len(orig_size)==2 or (len(orig_size)==3 and (orig_size[-1]==3 or orig_size[-1]==4))):
-                    height, width = orig_size[0], orig_size[1]
-                    max_dim  = max(height, width)
-                    rescale_factor = max_dim/512
-                    img = rescale(img, 1/rescale_factor)
-                    mask, _, _, _ = model.eval(img)
-                    mask = resize(mask, (height, width), order=0)
+                if Path(img_filename).suffix in (".tiff", ".tif") and len(orig_size)==3:
 
-                # or 3D tiff grayscale 
-                elif Path(img_filename).suffix in (".tiff", ".tif") and len(orig_size)==3:
                     print('Warning: 3D image stack found. We are assuming your first dimension is your stack dimension. Please cross check this.')
                     height, width = orig_size[1], orig_size[2]
+                    
                     max_dim = max(height, width)
                     rescale_factor = max_dim/512
                     img = rescale(img, 1/rescale_factor, channel_axis=0)
-                    mask, _, _, _ = model.eval(img, z_axis=0)
+                    mask, _, _, _ = model.eval(img, z_axis=0) #for 3D
+                    mask = merge_2d_labels(mask)
                     mask = resize(mask, (orig_size[0], height, width), order=0)
+                    
+                    # get labels of object segmentation
+                    labels = np.unique(mask)[1:]
+                    class_mask = np.copy(mask)
+                    class_mask[mask != 0] = 1 # set all objects to class 1
+                    
+                    # if the mean of an object in the gfp image is abpve the predefined threshold set it to class 2
+                    for l in labels:
+                        mean_l = np.mean(img_gfp[mask == l])
+                        if mean_l > threshold_gfp:
+                            class_mask[mask == l] = 2                   
                     
                 else: 
                     print('Image type not supported. Only 2D and 3D image shapes currently supported. 3D stacks must be of type grayscale. \
@@ -245,6 +344,7 @@ class MainWindow(QWidget):
                     sys.exit()
 
                 imsave(os.path.join(self.eval_data_path, seg_name), mask)
+                imsave(os.path.join(self.eval_data_path, class_name), class_mask)
 
 
 class WelcomeWindow(QWidget):
@@ -306,4 +406,5 @@ class WelcomeWindow(QWidget):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = WelcomeWindow()
+    # change to window = MainWindow('uncurated/data/path','curated/data/path') if you want to skip first window
     sys.exit(app.exec())
