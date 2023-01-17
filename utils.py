@@ -1,4 +1,127 @@
+import os
+from pathlib import Path
+
 import numpy as np
+import torch 
+from cellpose import models
+from skimage.io import imread, imsave
+from skimage.transform import resize, rescale
+
+def read_files(eval_data_path, train_data_path, img_filename_dapi, img_filename_gfp):
+
+    root_name = img_filename_dapi.split('DAPI Channel')[0]
+    potential_seg_name = root_name + '_seg.tiff' #Path(img_filename).stem+'_seg.tiff' #+Path(img_filename).suffix
+    potential_class_name = root_name + '_classes.tiff' #Path(img_filename).stem+'_classes.tiff' #+Path(img_filename).suffix
+
+    # check if the image is in the uncurated folder
+    if os.path.exists(os.path.join(eval_data_path, img_filename_dapi)):
+        in_eval = True
+        img_dapi = imread(os.path.join(eval_data_path, img_filename_dapi))
+        img_gfp = imread(os.path.join(eval_data_path, img_filename_gfp))
+
+        # check if object segmentation and class masks are in the folder and read them if they are there  
+        if os.path.exists(os.path.join(eval_data_path, potential_seg_name)):
+            seg = imread(os.path.join(eval_data_path, potential_seg_name))
+        else: seg = None
+        if os.path.exists(os.path.join(eval_data_path, potential_class_name)):
+            classes = imread(os.path.join(eval_data_path, potential_class_name))
+        else: classes = None
+
+    # if not it will be in the curated folder
+    else: 
+        img_dapi = imread(os.path.join(train_data_path, img_filename_dapi))
+        img_gfp = imread(os.path.join(train_data_path, img_filename_gfp))
+
+        # check if object segmentation and class masks are in the folder and read them if they are there 
+        if os.path.exists(os.path.join(train_data_path, potential_seg_name)):
+            seg = imread(os.path.join(train_data_path, potential_seg_name))
+        else: seg = None
+        if os.path.exists(os.path.join(train_data_path, potential_class_name)):
+            classes = imread(os.path.join(train_data_path, potential_class_name))
+        else: classes = None
+
+    return img_dapi, img_gfp, seg, classes, in_eval
+
+def get_channel_files(eval_data_path, train_data_path, cur_selected_img):
+
+    if os.path.exists(os.path.join(eval_data_path, cur_selected_img)):
+        in_eval = True
+    else: in_eval = False
+
+    if 'GFP Channel' in cur_selected_img:
+        gfp_img = cur_selected_img
+        name_split = gfp_img.split('GFP Channel')[0]
+        if in_eval:
+            dapi_img = [file for file in os.listdir(eval_data_path) if name_split in file and 'DAPI Channel' in file][0]
+        else:
+            dapi_img = [file for file in os.listdir(train_data_path) if name_split in file and 'DAPI Channel' in file][0]
+
+    else: 
+        dapi_img = cur_selected_img
+        name_split = dapi_img.split('DAPI Channel')[0]
+        if in_eval:
+            gfp_img = [file for file in os.listdir(eval_data_path) if name_split in file and 'GFP Channel' in file][0]
+        else:
+            gfp_img = [file for file in os.listdir(train_data_path) if name_split in file and 'GFP Channel' in file][0]
+
+    return dapi_img, gfp_img
+
+def get_predictions(eval_data_path, threshold_gfp, accepted_types):
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device=="cuda":
+        model = models.Cellpose(gpu=True, model_type="cyto")
+    else:
+        model = models.Cellpose(gpu=False, model_type="cyto")
+
+    list_files_dapi = [file for file in os.listdir(eval_data_path) if Path(file).suffix in accepted_types and 'DAPI Channel' in file]
+    list_files_gfp = [file for file in os.listdir(eval_data_path) if Path(file).suffix in accepted_types and 'GFP Channel' in file]
+    list_files_dapi.sort()
+    list_files_gfp.sort()
+
+    for idx, img_filename in enumerate(list_files_dapi):
+        # don't do this for segmentations in the folder
+        #extend to check the prefix also matches an existing image
+        #seg_name = Path(self.img_filename).stem+'_seg'+Path(self.img_filename).suffix
+        if '_seg' in img_filename or '_classes' in img_filename:  continue
+
+        else:
+            img = imread(os.path.join(eval_data_path, img_filename)) #DAPI
+            img_gfp = imread(os.path.join(eval_data_path, list_files_gfp[idx]))
+            orig_size = img.shape
+            # get root filename without DAPI Channel ending
+            name_split = img_filename.split('DAPI Channel')[0]
+            seg_name = name_split + '_seg.tiff' #Path(img_filename).stem+'_seg.tiff' #+Path(img_filename).suffix
+            class_name = name_split + '_classes.tiff' #Path(img_filename).stem+'_classes.tiff' #+Path(img_filename).suffix
+
+            if Path(img_filename).suffix in (".tiff", ".tif") and len(orig_size)==3:
+                warn_flag = '3d'
+                height, width = orig_size[1], orig_size[2]
+                
+                max_dim = max(height, width)
+                rescale_factor = max_dim/512
+                img = rescale(img, 1/rescale_factor, channel_axis=0)
+                mask, _, _, _ = model.eval(img, z_axis=0) #for 3D
+                mask = merge_2d_labels(mask)
+                mask = resize(mask, (orig_size[0], height, width), order=0)
+                
+                # get labels of object segmentation
+                labels = np.unique(mask)[1:]
+                class_mask = np.copy(mask)
+                class_mask[mask != 0] = 1 # set all objects to class 1
+                
+                # if the mean of an object in the gfp image is abpve the predefined threshold set it to class 2
+                for l in labels:
+                    mean_l = np.mean(img_gfp[mask == l])
+                    if mean_l > threshold_gfp:
+                        class_mask[mask == l] = 2                   
+                
+                imsave(os.path.join(eval_data_path, seg_name), mask)
+                imsave(os.path.join(eval_data_path, class_name), class_mask)
+            else: 
+                warn_flag = 'exit'
+
+            return warn_flag
 
 def merge_2d_labels(mask):
     inc = 100 
@@ -50,6 +173,10 @@ def merge_2d_labels(mask):
     if len(unique)<256:
         mask = mask.astype(np.uint8)
     return mask
+'''
+def changeWindow(w1, w2):
+    w1.hide()
+    w2.show()
 
 def circularity(perimeter, area):
     """Calculate the circularity of the region
@@ -97,7 +224,7 @@ def make_bbox(bbox_extents):
     bbox_rect = np.moveaxis(bbox_rect, 2, 0)
 
     return bbox_rect
-
+'''
 
 '''
 # to convert segmentation of classes into bboxes 
