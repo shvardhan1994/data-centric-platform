@@ -48,25 +48,31 @@ class NapariWindow(QWidget):
 
         self.setWindowTitle("napari Viewer")
         in_eval = False
-        self.img, self.img_gfp, seg, classes, in_eval = read_files(self.eval_data_path, self.train_data_path, self.img_filename_dapi, self.img_filename_gfp)
+        img, img_gfp, self.seg, self.classes, in_eval, self.root_name = read_files(self.eval_data_path, self.train_data_path, self.img_filename_dapi, self.img_filename_gfp)
         # start napari and load all data into the viewer
         self.viewer = napari.Viewer(show=False)
-        self.viewer.add_image(self.img, name='DAPI Channel')
-        if self.img_gfp is not None:
-            self.viewer.add_image(self.img_gfp, name='GFP Channel')
-        if seg is not None: 
-            self.viewer.add_labels(seg, name='Cell Objects')
-        if classes is not None:
-            self.viewer.add_labels(classes, name='Cell Classes')
+        self.viewer.add_image(img, name='DAPI Channel')
+        self.viewer.add_image(img_gfp, name='GFP Channel')
+        if self.seg is not None: 
+            self.viewer.add_labels(self.seg, name='Cell Objects')
+        if self.classes is not None:
+            self.viewer.add_labels(self.classes, name='Cell Classes')
 
         # add napari viewer to the window
         main_window = self.viewer.window._qt_window
         layout = QVBoxLayout()
         layout.addWidget(main_window)
-
+        '''
+        # this is currently not working. Problem with napari?
+        if self.seg is not None or self.classes is not None:
+            reset_button = QPushButton('Reset masks')
+            layout.addWidget(reset_button)
+            reset_button.clicked.connect(self.on_reset_button_clicked)
+        '''
         add_button = QPushButton('Add to training data')
         layout.addWidget(add_button)
         add_button.clicked.connect(self.on_add_button_clicked)
+
         if not in_eval: add_button.hide()
 
         # this is commented because it is the same as closing the window
@@ -90,6 +96,15 @@ class NapariWindow(QWidget):
             return [] + layer_names
         else:
             return []
+    '''
+    def on_reset_button_clicked(self):
+        if self.seg is not None: 
+            self.viewer.layers['Cell Objects'].data = self.seg
+            self.viewer.layers['Cell Objects'].refresh()
+        if self.classes is not None:
+            self.viewer.layers['Cell Classes'].data = self.classes
+            self.viewer.layers['Cell Classes'].refresh()
+    '''
 
     def on_add_button_clicked(self):
 
@@ -123,10 +138,18 @@ class NapariWindow(QWidget):
 
         if len(undefined_layers)!= 0:
             for idx, label in enumerate(undefined_layers):
-                name= 'label'+str(idx)+'.tif'
+                name= 'label'+str(idx)+'.tiff'
                 imsave(os.path.join(self.train_data_path, name), label)
-                print('Warning: you have created file with name: ', name,'. Please rename this with an extension _seg or _classes if you would like to use it within this tool again.')
-
+                txt = 'Warning: you have created file with name: '+name+'. \
+                        Please rename this to '+self.root_name+'_classes.tiff or '+self.root_name+'_seg.tiff if \
+                        you would like to use it within this tool again.'
+                msg = QMessageBox()
+                msg.setIcon(QMessageBox.Information)
+                msg.setText(txt)
+                msg.setWindowTitle("Warning")
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec()
+                
     '''
     def on_return_button_clicked(self):
         self.close()
@@ -209,10 +232,10 @@ class MainWindow(QWidget):
         self.show()
 
     def launch_napari_window(self):
-        if not self.cur_selected_img:
+        if not self.cur_selected_img or '_seg.tiff' in self.cur_selected_img or '_classes.tiff' in self.cur_selected_img:
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Information)
-            msg.setText("Please first select an image you wish to visualise.")
+            msg.setText("Please first select an image you wish to visualise. The selected image must belong be an original images, not a mask.")
             msg.setWindowTitle("Warning")
             msg.setStandardButtons(QMessageBox.Ok)
             msg.exec()

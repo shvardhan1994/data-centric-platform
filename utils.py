@@ -40,7 +40,7 @@ def read_files(eval_data_path, train_data_path, img_filename_dapi, img_filename_
             classes = imread(os.path.join(train_data_path, potential_class_name))
         else: classes = None
 
-    return img_dapi, img_gfp, seg, classes, in_eval
+    return img_dapi, img_gfp, seg, classes, in_eval, root_name
 
 def get_channel_files(eval_data_path, train_data_path, cur_selected_img):
 
