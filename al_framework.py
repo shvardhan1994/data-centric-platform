@@ -69,7 +69,7 @@ class NapariWindow(QWidget):
             layout.addWidget(reset_button)
             reset_button.clicked.connect(self.on_reset_button_clicked)
         '''
-        add_button = QPushButton('Add to training data & close window')
+        add_button = QPushButton('Add to training data and close window')
         layout.addWidget(add_button)
         add_button.clicked.connect(self.on_add_button_clicked)
 
