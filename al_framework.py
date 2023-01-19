@@ -69,7 +69,7 @@ class NapariWindow(QWidget):
             layout.addWidget(reset_button)
             reset_button.clicked.connect(self.on_reset_button_clicked)
         '''
-        add_button = QPushButton('Add to training data')
+        add_button = QPushButton('Add to training data & close window')
         layout.addWidget(add_button)
         add_button.clicked.connect(self.on_add_button_clicked)
 
@@ -149,6 +149,7 @@ class NapariWindow(QWidget):
                 msg.setWindowTitle("Warning")
                 msg.setStandardButtons(QMessageBox.Ok)
                 msg.exec()
+        self.close()
                 
     '''
     def on_return_button_clicked(self):
