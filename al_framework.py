@@ -99,7 +99,7 @@ class NapariWindow(QWidget):
         Get list of layer names of a given layer type.
         '''
         layer_names = [
-            layer.names
+            layer.name
             for layer in self.viewer.layers
             if type(layer) == layer_type
         ]
