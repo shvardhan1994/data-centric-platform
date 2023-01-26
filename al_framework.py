@@ -5,7 +5,7 @@ from typing import List
 import numpy as np
 from skimage.io import imread, imsave
 from skimage.transform import resize, rescale
-from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QMainWindow, QFileSystemModel, QListView, QHBoxLayout, QFileIconProvider, QLabel, QFileDialog, QLineEdit, QTreeView
+from PyQt5.QtWidgets import QApplication, QWidget, QPushButton, QVBoxLayout, QFileSystemModel, QHBoxLayout, QFileIconProvider, QLabel, QFileDialog, QLineEdit, QTreeView, QMessageBox
 from PyQt5.QtCore import QSize
 from PyQt5.QtGui import QPixmap, QIcon
 import napari
@@ -14,12 +14,15 @@ from cellpose import models, utils
 import warnings
 warnings.simplefilter('ignore')
 
+
 ICON_SIZE = QSize(512,512)
 accepted_types = (".jpg", ".jpeg", ".png", ".tiff", ".tif")
+
 
 def changeWindow(w1, w2):
     w1.hide()
     w2.show()
+
 
 class IconProvider(QFileIconProvider):
 
@@ -37,7 +40,18 @@ class IconProvider(QFileIconProvider):
         else:
             return super().icon(type)
 
+
 class NapariWindow(QWidget):
+    '''Napari Window Widget object.
+    Opens the napari image viewer to view and fix the labeles.
+    :param img_filename:
+    :type img_filename: string
+    :param eval_data_path:
+    :type eval_data_path:
+    :param train_data_path:
+    :type train_data_path:
+    '''
+
     def __init__(self, 
                 img_filename,
                 eval_data_path,
@@ -81,11 +95,11 @@ class NapariWindow(QWidget):
         self.show()
 
     def _get_layer_names(self, layer_type: napari.layers.Layer = napari.layers.Labels) -> List[str]:
-        """
+        '''
         Get list of layer names of a given layer type.
-        """
+        '''
         layer_names = [
-            layer.name
+            layer.names
             for layer in self.viewer.layers
             if type(layer) == layer_type
         ]
@@ -95,6 +109,10 @@ class NapariWindow(QWidget):
             return []
 
     def on_add_button_clicked(self):
+        '''
+        Defines what happens when the button is clicked.
+        '''
+
         label_names = self._get_layer_names()
         seg = self.viewer.layers[label_names[0]].data
         os.replace(os.path.join(self.eval_data_path, self.img_filename), os.path.join(self.train_data_path, self.img_filename))
@@ -110,6 +128,15 @@ class NapariWindow(QWidget):
     '''
 
 class MainWindow(QWidget):
+    '''Main Window Widget object.
+    Opens the main window of the app where selected images in both directories are listed. 
+    User can view the images, train the mdoel to get the labels, and visualise the result.
+    :param eval_data_path: Chosen path to images without labeles, selected by the user in the WelcomeWindow
+    :type eval_data_path: string
+    :param train_data_path: Chosen path to images with labeles, selected by the user in the WelcomeWindow
+    :type train_data_path: string
+    '''
+
     def __init__(self, eval_data_path, train_data_path):
         super().__init__()
 
@@ -183,11 +210,23 @@ class MainWindow(QWidget):
         self.setLayout(self.main_layout)
         self.show()
 
-    def launch_napari_window(self):                                       
-        self.nap_win = NapariWindow(img_filename=self.cur_selected_img, 
-                                    eval_data_path=self.eval_data_path, 
-                                    train_data_path=self.train_data_path)
-        self.nap_win.show()
+    def launch_napari_window(self):   
+        ''' 
+        Launches the napari window after the image is selected.
+        '''
+
+        if not self.cur_selected_img or '_seg.tiff' in self.cur_selected_img:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Information)
+            msg.setText("Please first select an image you wish to visualise. The selected image must belong be an original images, not a mask.")
+            msg.setWindowTitle("Warning")
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec()
+        else:
+            self.nap_win = NapariWindow(img_filename=self.cur_selected_img, 
+                                        eval_data_path=self.eval_data_path, 
+                                        train_data_path=self.train_data_path)
+            self.nap_win.show()
 
     def item_eval_selected(self, item):
         self.cur_selected_img = item.data()
@@ -199,6 +238,11 @@ class MainWindow(QWidget):
         pass
 
     def run_inference(self):
+        ''' 
+        Runs inference for the images without labeles (in the evaluation data path). 
+        Currently, cellpose is used for segmentation.
+        '''
+
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if device=="cuda":
             model = models.Cellpose(gpu=True, model_type="cyto")
@@ -254,6 +298,12 @@ class MainWindow(QWidget):
                 
 
 class WelcomeWindow(QWidget):
+    '''Welcome Window Widget object.
+    The first window of the application providing a dialog that allows users to select directories. 
+    Currently supported image file types that can be selected for segmentation are: .jpg, .jpeg, .png, .tiff, .tif.
+    By clicking 'start' the MainWindow is called.
+    '''
+
     def __init__(self):
         super().__init__()
         self.resize(200, 200)
@@ -287,9 +337,18 @@ class WelcomeWindow(QWidget):
         self.start_button.clicked.connect(self.start_main)
         self.main_layout.addWidget(self.start_button)
         self.setLayout(self.main_layout)
+
+        self.filename_train = ''
+        self.filename_val = ''
+
         self.show()
 
     def browse_eval_clicked(self):
+        '''
+        Activates  when the user clicks the button to choose the evaluation directory (QFileDialog) and 
+        displays the name of the evaluation directory chosen in the validation textbox line (QLineEdit).
+        '''
+
         fd = QFileDialog()
         fd.setFileMode(QFileDialog.Directory)
         if fd.exec_():
@@ -297,6 +356,11 @@ class WelcomeWindow(QWidget):
         self.val_textbox.setText(self.filename_val)
     
     def browse_train_clicked(self):
+        '''
+        Activates  when the user clicks the button to choose the train directory (QFileDialog) and 
+        displays the name of the train directory chosen in the train textbox line (QLineEdit).
+        '''
+
         fd = QFileDialog()
         fd.setFileMode(QFileDialog.Directory)
         if fd.exec_():
@@ -305,8 +369,20 @@ class WelcomeWindow(QWidget):
 
     
     def start_main(self):
-        self.hide()
-        self.mw = MainWindow(self.filename_val, self.filename_train)
+        '''
+        Starts the main window after the user clicks 'Start' and only if both evaluation and train directories are chosen. 
+        '''
+        
+        if self.filename_train and self.filename_val:
+            self.hide()
+            self.mw = MainWindow(self.filename_val, self.filename_train)
+        else:
+            msg = QMessageBox()
+            msg.setIcon(QMessageBox.Information)
+            msg.setText("You need to specify a folder both for your uncurated and curated dataset (even if the curated folder is currently empty). Please go back and select folders for both.")
+            msg.setWindowTitle("Warning")
+            msg.setStandardButtons(QMessageBox.Ok)
+            msg.exec()
     
 
 if __name__ == "__main__":
