@@ -1,10 +1,10 @@
-FROM continuumio/continuumio/anaconda3
+FROM continuumio/anaconda3
 
 COPY . .
 RUN conda create -n dcp-env python=3.9
 
-RUN apt-get update 
-RUN apt-get -y install gcc libaec-dev libblosc-dev
+#RUN apt-get update 
+#RUN apt-get -y install gcc libaec-dev libblosc-dev
 
 #apt-get install -y libaec-dev
 
